@@ -178,7 +178,7 @@ curl -X POST http://localhost:3000/api/documents/ingest \
 ## 🗄️ Database Schema
 
 ```sql
-CREATE TABLE documents (
+CREATE TABLE documents_table_name (
   id          BIGSERIAL PRIMARY KEY,
   document_id UUID        NOT NULL,
   title       TEXT        NOT NULL,
@@ -261,8 +261,8 @@ Access the database UI at `http://localhost:5050`
 | Password | your `PGADMIN_DEFAULT_PASSWORD` |
 | Host     | `rag_postgres`                  |
 | Port     | `5432`                          |
-| Database | `ragdb`                         |
-| Username | `raguser`                       |
+| Database | `databaseName`                         |
+| Username | `databaseUserName`                       |
 
 ---
 
