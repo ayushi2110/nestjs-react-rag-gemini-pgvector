@@ -1,6 +1,6 @@
 # 🔍 RAG Assistant
 
-> A production-ready Retrieval-Augmented Generation (RAG) chat application built with NestJS, React, PostgreSQL + pgvector, and Google Gemini.
+> A Retrieval-Augmented Generation (RAG) chat application built with NestJS, React, PostgreSQL + pgvector, and Google Gemini.
 
 ---
 
