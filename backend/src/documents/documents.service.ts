@@ -4,6 +4,7 @@ import {
   Inject,
   BadRequestException,
   InternalServerErrorException,
+  NotFoundException,
 } from "@nestjs/common";
 import { Pool } from "pg";
 import { randomUUID } from "crypto";
@@ -25,6 +26,11 @@ export interface SimilarChunk extends StoredChunk {
   similarity: number;
 }
 
+export interface MetadataFilterOptions {
+  metadataFilters?: Record<string, string | number | boolean>;
+  candidateK?: number;
+}
+
 export interface IngestResult {
   documentId: string;
   title: string;
@@ -36,6 +42,18 @@ export interface DocumentStats {
   totalDocuments: number;
   oldestChunk: Date | null;
   newestChunk: Date | null;
+}
+
+export interface DocumentListItem {
+  documentId: string;
+  title: string;
+  metadata: Record<string, unknown>;
+  createdAt: Date;
+  chunkCount: number;
+}
+
+export interface DocumentDetails extends DocumentListItem {
+  chunks: Array<{ id: number; chunkIndex: number; content: string }>;
 }
 
 @Injectable()
@@ -122,8 +140,20 @@ export class DocumentsService {
   async findSimilar(
     queryEmbedding: number[],
     topK = 5,
+    options: MetadataFilterOptions = {},
   ): Promise<SimilarChunk[]> {
     const vectorLiteral = `[${queryEmbedding.join(",")}]`;
+    const limit = Math.max(
+      topK,
+      options.candidateK ?? Math.min(topK * 4, 20),
+    );
+
+    const { clauses, values } = this.buildMetadataFilters(
+      options.metadataFilters ?? {},
+    );
+    const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    const params: unknown[] = [vectorLiteral, ...values, limit];
+    const limitIndex = params.length;
 
     const { rows } = await this.pool.query<SimilarChunk>(
       `SELECT
@@ -135,12 +165,36 @@ export class DocumentsService {
          created_at,
          1 - (embedding <=> $1::vector) AS similarity
        FROM documents
+       ${whereClause}
        ORDER BY embedding <=> $1::vector
-       LIMIT $2`,
-      [vectorLiteral, topK],
+       LIMIT $${limitIndex}`,
+      params,
     );
 
     return rows;
+  }
+
+  private buildMetadataFilters(
+    metadataFilters: Record<string, string | number | boolean>,
+  ): { clauses: string[]; values: unknown[] } {
+    const clauses: string[] = [];
+    const values: unknown[] = [];
+
+    for (const [key, value] of Object.entries(metadataFilters)) {
+      if (
+        value === undefined ||
+        value === null ||
+        value === "" ||
+        !/^[a-zA-Z0-9_-]+$/.test(key)
+      ) {
+        continue;
+      }
+
+      clauses.push(`metadata->>'${key}' = $${values.length + 2}`);
+      values.push(String(value));
+    }
+
+    return { clauses, values };
   }
 
   async getStats(): Promise<DocumentStats> {
@@ -154,5 +208,83 @@ export class DocumentsService {
     `);
 
     return rows[0] as DocumentStats;
+  }
+
+  async listDocuments(
+    page = 1,
+    pageSize = 20,
+  ): Promise<{
+    items: DocumentListItem[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const safePage = Math.max(1, page);
+    const safePageSize = Math.min(Math.max(1, pageSize), 100);
+    const offset = (safePage - 1) * safePageSize;
+    const [documents, count] = await Promise.all([
+      this.pool.query<DocumentListItem>(
+        `SELECT
+           document_id AS "documentId",
+           title,
+           (metadata - 'chunkIndex' - 'wordCount') AS metadata,
+           MIN(created_at) AS "createdAt",
+           COUNT(*)::int AS "chunkCount"
+         FROM documents
+         GROUP BY document_id, title, (metadata - 'chunkIndex' - 'wordCount')
+         ORDER BY MIN(created_at) DESC, document_id
+         LIMIT $1 OFFSET $2`,
+        [safePageSize, offset],
+      ),
+      this.pool.query<{ total: number }>(
+        "SELECT COUNT(DISTINCT document_id)::int AS total FROM documents",
+      ),
+    ]);
+
+    return {
+      items: documents.rows,
+      total: count.rows[0].total,
+      page: safePage,
+      pageSize: safePageSize,
+    };
+  }
+
+  async getDocument(documentId: string): Promise<DocumentDetails> {
+    const { rows } = await this.pool.query<DocumentDetails>(
+      `SELECT
+         document_id AS "documentId",
+         title,
+         (metadata - 'chunkIndex' - 'wordCount') AS metadata,
+         MIN(created_at) AS "createdAt",
+         COUNT(*)::int AS "chunkCount",
+         jsonb_agg(
+           jsonb_build_object(
+             'id', id,
+             'chunkIndex', COALESCE((metadata->>'chunkIndex')::int, 0),
+             'content', content
+           ) ORDER BY COALESCE((metadata->>'chunkIndex')::int, 0), id
+         ) AS chunks
+       FROM documents
+       WHERE document_id = $1
+       GROUP BY document_id, title, (metadata - 'chunkIndex' - 'wordCount')`,
+      [documentId],
+    );
+
+    if (!rows[0]) {
+      throw new NotFoundException("Document not found.");
+    }
+
+    return rows[0];
+  }
+
+  async deleteDocument(documentId: string): Promise<void> {
+    const result = await this.pool.query(
+      "DELETE FROM documents WHERE document_id = $1",
+      [documentId],
+    );
+
+    if (result.rowCount === 0) {
+      throw new NotFoundException("Document not found.");
+    }
   }
 }
