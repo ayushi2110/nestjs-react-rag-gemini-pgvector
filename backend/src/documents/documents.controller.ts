@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Get,
+  Delete,
   Body,
   UploadedFile,
   UseInterceptors,
@@ -9,14 +10,22 @@ import {
   Logger,
   HttpCode,
   HttpStatus,
+  UseGuards,
+  Query,
+  Param,
+  ParseUUIDPipe,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { memoryStorage } from "multer";
 import { DocumentsService } from "./documents.service";
 import { IngestDto } from "./dto/ingest.dto";
+import { ListDocumentsDto } from "./dto/list-documents.dto";
+import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { AdminGuard } from "../auth/guards/admin.guard";
 import pdfParse = require("pdf-parse");
 
 @Controller("documents")
+@UseGuards(JwtAuthGuard, AdminGuard)
 export class DocumentsController {
   private readonly logger = new Logger(DocumentsController.name);
 
@@ -89,6 +98,26 @@ export class DocumentsController {
   @Get("stats")
   async stats() {
     return this.documentsService.getStats();
+  }
+
+  @Get()
+  async list(@Query() query: ListDocumentsDto) {
+    return this.documentsService.listDocuments(query.page, query.pageSize);
+  }
+
+  @Get(":documentId")
+  async getDocument(
+    @Param("documentId", new ParseUUIDPipe()) documentId: string,
+  ) {
+    return this.documentsService.getDocument(documentId);
+  }
+
+  @Delete(":documentId")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async deleteDocument(
+    @Param("documentId", new ParseUUIDPipe()) documentId: string,
+  ): Promise<void> {
+    await this.documentsService.deleteDocument(documentId);
   }
 
   private async extractText(file: Express.Multer.File): Promise<string> {

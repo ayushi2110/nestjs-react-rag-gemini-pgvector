@@ -1,6 +1,7 @@
 import {
   Controller,
   Post,
+  Get,
   Body,
   HttpCode,
   HttpStatus,
@@ -18,7 +19,14 @@ export class ChatController {
   @Post()
   @HttpCode(HttpStatus.OK)
   async chat(@Body() dto: ChatDto) {
-    this.logger.log(`POST /chat – question="${dto.question}"`);
+    this.logger.log(
+      `POST /chat – questionLength=${dto.question.length} topK=${dto.topK ?? 5}`,
+    );
     return this.chatService.chat(dto);
+  }
+
+  @Get("evaluation")
+  async evaluation() {
+    return this.chatService.runRetrievalEvaluation();
   }
 }
